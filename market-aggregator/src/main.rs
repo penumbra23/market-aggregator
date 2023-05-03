@@ -6,22 +6,29 @@ mod services;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let binance = BinanceStream::new("btcusdt", 10, 100)
-        .await
-        .unwrap()
-        .get_ob_stream()
-        .await
-        .unwrap();
-    let bitstamp = BitstampStream::new("btcusdt")
-        .await
-        .unwrap()
-        .get_ob_stream()
+    let mut binance_client = BinanceStream::new("btcusdt", 10, 100)
         .await
         .unwrap();
 
-    let mut final_stream = (binance, bitstamp).merge();
+    let mut bitstamp_client = BitstampStream::new("btcusdt")
+        .await
+        .unwrap();
 
-    while let Some(order) = final_stream.next().await {
+    let result = binance_client.fetch_snapshot("btcusdt").await.unwrap();
+    let result2 = bitstamp_client.fetch_snapshot("btcusdt").await.unwrap();
+
+    let mut binance = binance_client
+        .get_ob_stream()
+        .await
+        .unwrap();
+    let mut bitstamp = bitstamp_client
+        .get_ob_stream()
+        .await
+        .unwrap();
+    
+    // let mut final_stream = (binance, bitstamp).merge();
+
+    while let Some(order) = bitstamp.next().await {
         println!("{:?}", order);
     }
 
