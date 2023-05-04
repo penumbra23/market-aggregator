@@ -7,7 +7,7 @@ use reqwest::StatusCode;
 
 #[derive(Debug)]
 pub struct OrderbookError {
-    details: String
+    pub details: String
 }
 
 impl std::fmt::Display for OrderbookError {
@@ -37,8 +37,9 @@ impl From<reqwest::Error> for OrderbookError {
 type Result<T> = std::result::Result<T, OrderbookError>;
 
 /// Trait for streams that serve `OrderBookUpdate`s.
-/// Each new service fetching orderbook entries needs to imlement `OrderBookStream`.
+/// Each new service fetching orderbook entries needs to imlement `OrderbookConnection`.
 #[async_trait::async_trait]
-pub trait OrderBookSnapshot {
+pub trait OrderbookConnection: futures::Stream<Item = OrderbookUpdate> {
     async fn fetch_snapshot(&mut self, market_pair: &str) -> Result<OrderbookUpdate>;
+    async fn connect(&mut self) -> Result<()>;
 }

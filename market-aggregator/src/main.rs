@@ -1,14 +1,55 @@
-use std::{collections::HashMap, cmp::Ordering};
+use std::collections::HashMap;
 
 use amqprs::{connection::{Connection, OpenConnectionArguments}, channel::{ExchangeDeclareArguments, ExchangeType, BasicPublishArguments}, BasicProperties};
-use common::Decimal;
-use futures::StreamExt;
-use merge_streams::MergeStreams;
-use services::{binance::{BinanceStream}, bitstamp::BitstampStream};
+use common::Orderbook;
+use futures::{stream::select_all, StreamExt};
+use services::{binance::BinanceStream, bitstamp::BitstampStream, OrderbookError};
 
-use crate::services::OrderBookSnapshot;
+use crate::services::OrderbookConnection;
 
 mod services;
+
+struct App {
+    clients: HashMap<String, Box<dyn OrderbookConnection + Unpin>>,
+    orderbooks: HashMap<String, Orderbook>,
+}
+
+impl App {
+    pub fn new() -> Self {
+        Self {
+            clients: HashMap::new(),
+            orderbooks: HashMap::new(),
+        }
+    }
+
+    pub fn add_client(&mut self, stream: &str, client: Box<dyn OrderbookConnection + Unpin>) -> Result<(), OrderbookError> {
+        if self.clients.contains_key(stream) {
+            return Err(OrderbookError{ details: String::from("Client already present") });
+        }
+
+        self.clients.insert(stream.to_owned(), client);
+        self.orderbooks.insert(stream.to_owned(), Orderbook::new(stream));
+
+        Ok(())
+    }
+
+    pub async fn run(mut self) -> Result<(), Box<dyn std::error::Error>> {
+        for (_, cl) in &mut self.clients {
+            // TODO: check res
+            let res = cl.connect().await;
+        }
+
+        let mut streams = self.clients
+            .into_iter()
+            .map(|(_, v)| v)
+            .collect::<Vec<Box<dyn OrderbookConnection + Unpin>>>();
+
+        while let Some(order) = select_all(streams.iter_mut()).next().await {
+            println!("O: {:?}", order);
+        }
+        Ok(())
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -30,62 +71,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .finish()
         ).await?;
     
-    let mut binance_client = BinanceStream::new("btcusdt")
+    let binance_client = BinanceStream::new("btcusdt")
         .await
         .unwrap();
     
-    let mut bitstamp_client = BitstampStream::new("btcusdt")
+    let bitstamp_client = BitstampStream::new("btcusdt")
         .await
         .unwrap();
 
-    let mut orderbook = HashMap::new();
+    let mut app = App::new();
 
-    let result = binance_client.fetch_snapshot("btcusdt").await.unwrap();
-    let result2 = bitstamp_client.fetch_snapshot("btcusdt").await.unwrap();
+    app.add_client("binance", Box::new(binance_client))?;
+    app.add_client("bitstamp", Box::new(bitstamp_client))?;
 
-    orderbook.insert(result.stream.clone(), result);
-    orderbook.insert(result2.stream.clone(), result2);
-
-    binance_client.connect().await?;
-    bitstamp_client.connect().await?;
-
-    let mut final_stream = (binance_client, bitstamp_client).merge();
-
-    while let Some(order) = final_stream.next().await {
-        let stream = order.stream;
-        let orderbook_update = match orderbook.get_mut(&stream) {
-            Some(nn) => nn,
-            None => continue,
-        };
-
-        orderbook_update.bids.retain(|_k, &mut v| v.cmp(&Decimal::ZERO) != Ordering::Equal);
-        orderbook_update.asks.retain(|_k, &mut v| v.cmp(&Decimal::ZERO) != Ordering::Equal);
-
-        for bid in order.bids {
-            orderbook_update.bids.insert(bid.0, bid.1);
-        }
-
-        for ask in order.asks {
-            orderbook_update.asks.insert(ask.0, ask.1);
-        }
-        
-        let args = BasicPublishArguments::new(exchange_name, format!("rates.{}", stream).as_str());
-    
-        println!("{:?}", &orderbook);
-
-        let content = serde_json::to_string(&orderbook).unwrap();
-
-        channel
-            .basic_publish(
-                BasicProperties::default()
-                .with_persistence(true)
-                .finish(), 
-                content.into(),
-                args)
-                .await?;
-        channel.close().await;
-        return Ok(());
-    }
+    app.run().await?;
 
     Ok(())
 }

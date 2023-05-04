@@ -7,7 +7,7 @@ use serde_json::json;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{WebSocketStream, MaybeTlsStream, tungstenite::Message};
 
-use super::{Result, OrderbookUpdate, OrderbookError, OrderBookSnapshot};
+use super::{Result, OrderbookUpdate, OrderbookError, OrderbookConnection};
 
 const BINANCE_WS_URL: &str = "wss://stream.binance.com:9443/ws";
 
@@ -72,28 +72,6 @@ impl BinanceStream {
             inner_stream: binance_ws_stream,
             last_update: Arc::new(RwLock::new(0)),
         })
-    }
-
-    pub async fn connect(&mut self) -> Result<()> {
-        let (mut binance_ws_stream, _) = tokio_tungstenite::connect_async(
-            BINANCE_WS_URL
-        ).await?;
-        
-        binance_ws_stream
-            .send(Message::Text(json!(self.subscription).to_string()))
-            .await?;
-
-        match binance_ws_stream.next().await {
-            Some(msg) => {
-                println!("check msg {}", msg.unwrap());
-                // msg?;
-            },
-            None => return Err(super::OrderbookError { details: String::from("No response") }),
-        }
-        
-        self.inner_stream = binance_ws_stream;
-
-        Ok(())
     }
 }
 
@@ -167,7 +145,7 @@ impl Stream for BinanceStream {
 
 
 #[async_trait::async_trait]
-impl OrderBookSnapshot for BinanceStream {
+impl OrderbookConnection for BinanceStream {
     async fn fetch_snapshot(&mut self, market_pair: &str) -> Result<OrderbookUpdate> {
         let url = format!("https://api.binance.com/api/v3/depth?symbol={}&limit=50", market_pair.to_ascii_uppercase());
         let response = reqwest::get(&url).await?.text().await?;
@@ -180,5 +158,27 @@ impl OrderBookSnapshot for BinanceStream {
         self.last_update = Arc::new(RwLock::new(orderbook.last_update_id));
 
         Ok(orderbook.into())
+    }
+
+    async fn connect(&mut self) -> Result<()> {
+        let (mut binance_ws_stream, _) = tokio_tungstenite::connect_async(
+            BINANCE_WS_URL
+        ).await?;
+        
+        binance_ws_stream
+            .send(Message::Text(json!(self.subscription).to_string()))
+            .await?;
+
+        match binance_ws_stream.next().await {
+            Some(msg) => {
+                println!("check msg {}", msg.unwrap());
+                // msg?;
+            },
+            None => return Err(super::OrderbookError { details: String::from("No response") }),
+        }
+        
+        self.inner_stream = binance_ws_stream;
+
+        Ok(())
     }
 }

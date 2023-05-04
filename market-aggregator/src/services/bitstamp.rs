@@ -8,7 +8,7 @@ use serde_json::json;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{WebSocketStream, MaybeTlsStream, tungstenite::Message};
 
-use super::{OrderBookSnapshot, OrderbookUpdate, Result, OrderbookError};
+use super::{OrderbookConnection, OrderbookUpdate, Result, OrderbookError};
 
 const BITSTAMP_WS_URL: &str = "wss://ws.bitstamp.net";
 
@@ -77,28 +77,6 @@ impl BitstampStream {
             start_time: Arc::new(RwLock::new(0)),
         })
     }
-
-    pub async fn connect(&mut self) -> Result<()> {
-        let (mut bitstamp_ws_stream, _) = tokio_tungstenite::connect_async(
-            BITSTAMP_WS_URL
-        ).await?;
-
-        bitstamp_ws_stream
-            .send(Message::Text(json!(self.subscription).to_string()))
-            .await?;
-
-        match bitstamp_ws_stream.next().await {
-            Some(msg) => {
-                println!("check msg {}", msg.unwrap());
-                // msg?;
-            },
-            None => return Err(super::OrderbookError { details: String::from("No response") }),
-        }
-    
-        self.inner_stream = bitstamp_ws_stream;
-
-        Ok(())
-    }
 }
 
 impl Stream for BitstampStream {
@@ -166,7 +144,7 @@ impl Stream for BitstampStream {
 }
 
 #[async_trait::async_trait]
-impl OrderBookSnapshot for BitstampStream {
+impl OrderbookConnection for BitstampStream {
     async fn fetch_snapshot(&mut self, market_pair: &str) -> Result<OrderbookUpdate> {
         let url = format!("https://www.bitstamp.net/api/v2/order_book/{}", market_pair.to_ascii_lowercase());
         let response = reqwest::get(url).await?.text().await?;
@@ -180,5 +158,27 @@ impl OrderBookSnapshot for BitstampStream {
         self.start_time = Arc::new(RwLock::new(orderbook.timestamp.parse::<u64>().unwrap()));
 
         Ok(orderbook.into())
+    }
+
+    async fn connect(&mut self) -> Result<()> {
+        let (mut bitstamp_ws_stream, _) = tokio_tungstenite::connect_async(
+            BITSTAMP_WS_URL
+        ).await?;
+
+        bitstamp_ws_stream
+            .send(Message::Text(json!(self.subscription).to_string()))
+            .await?;
+
+        match bitstamp_ws_stream.next().await {
+            Some(msg) => {
+                println!("check msg {}", msg.unwrap());
+                // msg?;
+            },
+            None => return Err(super::OrderbookError { details: String::from("No response") }),
+        }
+    
+        self.inner_stream = bitstamp_ws_stream;
+
+        Ok(())
     }
 }
