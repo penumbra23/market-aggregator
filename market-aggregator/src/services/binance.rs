@@ -1,13 +1,15 @@
-use std::{task::Poll, pin::Pin, collections::BTreeMap, sync::{Arc, RwLock}};
+use std::{task::Poll, pin::Pin, sync::{Arc, RwLock}};
 
-use futures::{SinkExt, StreamExt, Stream};
-use pin_project::pin_project;
+use common::Decimal;
+use futures::{SinkExt, StreamExt, Stream, executor::block_on};
 use serde::{Serialize, Deserialize};
 use serde_json::json;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{WebSocketStream, MaybeTlsStream, tungstenite::Message};
 
-use super::{Result, OrderBookStream, OrderbookUpdate, Decimal, OrderbookError};
+use super::{Result, OrderbookUpdate, OrderbookError, OrderBookSnapshot};
+
+const BINANCE_WS_URL: &str = "wss://stream.binance.com:9443/ws";
 
 #[derive(Serialize)]
 struct BinanceSubscription {
@@ -47,53 +49,98 @@ pub  struct BinanceOrderBookUpdate {
 }
 
 /// Async stream for reading Binance orderbook data.
-#[pin_project]
 pub struct BinanceStream {
     subscription: BinanceSubscription,
     last_update: Arc<RwLock<u64>>,
-    #[pin]
-    inner_stream: WebSocketStream<MaybeTlsStream<TcpStream>>
+    inner_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
 }
 
 impl BinanceStream {
-    pub async fn new(market_pair: &str, depth: u8, freq: u16) -> Result<BinanceStream> {
+    pub async fn new(market_pair: &str) -> Result<BinanceStream> {
         let sub = BinanceSubscription {
             method: "SUBSCRIBE".into(),
             params: vec![format!("{}@depth", market_pair).into()],
             id: 1,
         };
-
-        let binance_socket_url = "wss://stream.binance.com:9443/ws";
-        let  (binance_ws_stream, _) = tokio_tungstenite::connect_async(binance_socket_url).await?;
-
+        
+        let  (binance_ws_stream, _) = tokio_tungstenite::connect_async(
+            BINANCE_WS_URL
+        ).await?;
+        
         Ok(Self {
             subscription: sub,
             inner_stream: binance_ws_stream,
             last_update: Arc::new(RwLock::new(0)),
         })
     }
+
+    pub async fn connect(&mut self) -> Result<()> {
+        let (mut binance_ws_stream, _) = tokio_tungstenite::connect_async(
+            BINANCE_WS_URL
+        ).await?;
+        
+        binance_ws_stream
+            .send(Message::Text(json!(self.subscription).to_string()))
+            .await?;
+
+        match binance_ws_stream.next().await {
+            Some(msg) => {
+                println!("check msg {}", msg.unwrap());
+                // msg?;
+            },
+            None => return Err(super::OrderbookError { details: String::from("No response") }),
+        }
+        
+        self.inner_stream = binance_ws_stream;
+
+        Ok(())
+    }
 }
 
 impl Stream for BinanceStream {
-    type Item = BinanceOrderBookUpdate;
+    type Item = OrderbookUpdate;
 
     /// Wrapped `poll_next` for converting the data. In case the conversion fails, it keeps polling the stream.
-    fn poll_next(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
-        let poll = self.project().inner_stream.poll_next(cx);
-        match poll {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.inner_stream).poll_next(cx) {
             Poll::Ready(Some(poll_result)) => {
                 match poll_result {
                     Ok(msg) => {
-                        if let Message::Text(text) = msg {
-                            match serde_json::from_str::<BinanceOrderBookUpdate>(&text) {
-                                Ok(order) => {
-                                    return Poll::Ready(Some(order));
-                                },
-                                Err(err) => {
-                                    // TODO: log
-                                    println!("Err {} {}", err, text);
-                                },
-                            };
+                        match msg {
+                            Message::Text(text) => {
+                                match serde_json::from_str::<BinanceOrderBookUpdate>(&text) {
+                                    Ok(order) => {
+                                        let last_update = self.last_update.clone();
+                                        if order.last_update_id <= *last_update.read().unwrap() {
+                                            cx.waker().wake_by_ref();
+                                            return Poll::Pending;
+                                        }
+                            
+                                        // Update the last read id
+                                        let mut lu = self.last_update.write().unwrap();
+                                        *lu = order.last_update_id;
+                            
+                                        return Poll::Ready(Some(
+                                            OrderbookUpdate{
+                                                stream: String::from("binance"),
+                                                asks: order.asks.into_iter().map(|x| (x.0, x.1)).collect(),
+                                                bids: order.bids.into_iter().map(|x| (x.0, x.1)).collect(),
+                                            }));
+                                    },
+                                    Err(err) => {
+                                        // TODO: log
+                                        println!("Err {} {}", err, text);
+                                    },
+                                };
+                            },
+                            Message::Close(_) => {
+                                // TODO: check res and retry
+                                let _res = block_on(self.connect());
+                            },
+                            Message::Ping(p) => println!("ping {:?}", p),
+                            Message::Pong(p) => println!("pong {:?}", p),
+                            _ => {},
+
                         }
                     },
                     Err(err) => {
@@ -105,9 +152,13 @@ impl Stream for BinanceStream {
                 cx.waker().wake_by_ref();
                 return Poll::Pending;
             },
-            Poll::Ready(None) => return Poll::Ready(None),
-            Poll::Pending => {
+            Poll::Ready(None) => {
+                // TODO: check res and retry
+                let _res = block_on(self.connect());
                 cx.waker().wake_by_ref();
+                return Poll::Pending;
+            },
+            Poll::Pending => {
                 return Poll::Pending;
             },
         }
@@ -116,9 +167,9 @@ impl Stream for BinanceStream {
 
 
 #[async_trait::async_trait]
-impl OrderBookStream for BinanceStream {
+impl OrderBookSnapshot for BinanceStream {
     async fn fetch_snapshot(&mut self, market_pair: &str) -> Result<OrderbookUpdate> {
-        let url = format!("https://api.binance.com/api/v3/depth?symbol={}&limit=10", market_pair.to_ascii_uppercase());
+        let url = format!("https://api.binance.com/api/v3/depth?symbol={}&limit=50", market_pair.to_ascii_uppercase());
         let response = reqwest::get(&url).await?.text().await?;
         let orderbook: BinanceOrderBookSnapshot = match serde_json::from_str(&response) {
             Ok(ob) => ob,
@@ -129,43 +180,5 @@ impl OrderBookStream for BinanceStream {
         self.last_update = Arc::new(RwLock::new(orderbook.last_update_id));
 
         Ok(orderbook.into())
-    }
-
-    async fn get_ob_stream(mut self) -> Result<Box<dyn Stream<Item = OrderbookUpdate> + Unpin>> {
-        self.inner_stream
-            .send(Message::Text(json!(self.subscription).to_string()))
-            .await?;
-
-        match self.inner_stream.next().await {
-            Some(msg) => {
-                // TODO: check if result is correct
-                msg?;
-            },
-            None => return Err(super::OrderbookError { details: String::from("No response") }),
-        }
-
-        let last_update = self.last_update.clone();
-        
-        let result_stream = self.map::<OrderbookUpdate, _>(move |bel|{
-            // First check if the updates are after the last one
-            if bel.last_update_id <= *last_update.read().unwrap() {
-                return OrderbookUpdate {
-                    stream: String::from("binance"),
-                    asks: BTreeMap::default(),
-                    bids: BTreeMap::default(),
-                };
-            }
-
-            // Update the last read id
-            let mut lu = last_update.write().unwrap();
-            *lu = bel.last_update_id;
-
-            return OrderbookUpdate{
-                stream: String::from("binance"),
-                asks: bel.asks.into_iter().map(|x| (x.0, x.1)).collect(),
-                bids: bel.bids.into_iter().map(|x| (x.0, x.1)).collect(),
-            };
-        });
-        Ok(Box::new(result_stream))
     }
 }

@@ -1,13 +1,16 @@
-use std::{pin::Pin, task::Poll, collections::{HashMap, BTreeMap}, sync::{Arc, RwLock}};
+use std::{pin::Pin, task::Poll, collections::{HashMap}, sync::{Arc, RwLock}};
 
-use futures::{Stream, SinkExt, StreamExt};
+use common::Decimal;
+use futures::{Stream, SinkExt, StreamExt, executor::block_on};
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{WebSocketStream, MaybeTlsStream, tungstenite::Message};
 
-use super::{OrderBookStream, OrderbookUpdate, Result, Decimal, OrderbookError};
+use super::{OrderBookSnapshot, OrderbookUpdate, Result, OrderbookError};
+
+const BITSTAMP_WS_URL: &str = "wss://ws.bitstamp.net";
 
 #[derive(Debug, Deserialize)]
 pub struct BitstampOrderBookUpdate {
@@ -57,11 +60,13 @@ pub struct BitstampStream {
 
 impl BitstampStream {
     pub async fn new(market_pair: &str) -> Result<BitstampStream> {
-        let bitstamp_socket_url = "wss://ws.bitstamp.net";
-        let (bitstamp_ws_stream, _) = tokio_tungstenite::connect_async(bitstamp_socket_url).await?;
+        let (bitstamp_ws_stream, _) = tokio_tungstenite::connect_async(
+            BITSTAMP_WS_URL
+        ).await?;
+
         let bitstamp_subscription = BitstampSubscription {
             event: "bts:subscribe".into(),
-            data: [("channel".into(), format!("order_book_{}", market_pair).into())]
+            data: [("channel".into(), format!("diff_order_book_{}", market_pair).into())]
                 .into_iter()
                 .collect(),
         };
@@ -72,27 +77,72 @@ impl BitstampStream {
             start_time: Arc::new(RwLock::new(0)),
         })
     }
+
+    pub async fn connect(&mut self) -> Result<()> {
+        let (mut bitstamp_ws_stream, _) = tokio_tungstenite::connect_async(
+            BITSTAMP_WS_URL
+        ).await?;
+
+        bitstamp_ws_stream
+            .send(Message::Text(json!(self.subscription).to_string()))
+            .await?;
+
+        match bitstamp_ws_stream.next().await {
+            Some(msg) => {
+                println!("check msg {}", msg.unwrap());
+                // msg?;
+            },
+            None => return Err(super::OrderbookError { details: String::from("No response") }),
+        }
+    
+        self.inner_stream = bitstamp_ws_stream;
+
+        Ok(())
+    }
 }
 
 impl Stream for BitstampStream {
-    type Item = BitstampOrderBookUpdate;
+    type Item = OrderbookUpdate;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
-        let poll = self.project().inner_stream.poll_next(cx);
-        match poll {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.inner_stream).poll_next(cx) {
             Poll::Ready(Some(poll_result)) => {
                 match poll_result {
                     Ok(msg) => {
-                        if let Message::Text(text) = msg {
-                            match serde_json::from_str::<BitstampOrderBookUpdate>(&text) {
-                                Ok(order) => {
-                                    return Poll::Ready(Some(order));
-                                },
-                                Err(err) => {
-                                    // TODO: log error
-                                    println!("Err {} {}", err, text);
-                                },
-                            };
+                        match msg {
+                            Message::Text(text) => {
+                                match serde_json::from_str::<BitstampOrderBookUpdate>(&text) {
+                                    Ok(order) => {
+                                        let last_update = self.start_time.clone();
+                                        let timestamp = order.data.timestamp.parse::<u64>().unwrap();
+                                        if timestamp <= *last_update.read().unwrap() {
+                                            cx.waker().wake_by_ref();
+                                            return Poll::Pending;
+                                        }
+
+                                        // // Update the last read id
+                                        let mut lu = last_update.write().unwrap();
+                                        *lu = timestamp;
+                                        
+                                        return Poll::Ready(Some(OrderbookUpdate {
+                                            stream: String::from("bitstamp"),
+                                            asks: order.data.asks.into_iter().map(|x| (x.0, x.1)).collect(),
+                                            bids: order.data.bids.into_iter().map(|x| (x.0, x.1)).collect(),
+                                        }));
+                                    },
+                                    Err(err) => {
+                                        // TODO: log error
+                                        println!("Err {} {}", err, text);
+                                    },
+                                };
+                            },
+                            Message::Ping(_) => todo!(),
+                            Message::Pong(_) => todo!(),
+                            Message::Close(_) => {
+                                // TODO: check res and retry
+                                let _res = block_on(self.connect());
+                            },
+                            _ => {},
                         }
                     },
                     Err(err) => {
@@ -103,9 +153,12 @@ impl Stream for BitstampStream {
                 cx.waker().wake_by_ref();
                 return Poll::Pending;
             }
-            Poll::Ready(None) => return Poll::Ready(None),
-            Poll::Pending => {
+            Poll::Ready(None) => {
+                let _res = block_on(self.connect());
                 cx.waker().wake_by_ref();
+                return Poll::Pending;
+            },
+            Poll::Pending => {
                 return Poll::Pending;
             },
         }
@@ -113,7 +166,7 @@ impl Stream for BitstampStream {
 }
 
 #[async_trait::async_trait]
-impl OrderBookStream for BitstampStream {
+impl OrderBookSnapshot for BitstampStream {
     async fn fetch_snapshot(&mut self, market_pair: &str) -> Result<OrderbookUpdate> {
         let url = format!("https://www.bitstamp.net/api/v2/order_book/{}", market_pair.to_ascii_lowercase());
         let response = reqwest::get(url).await?.text().await?;
@@ -127,44 +180,5 @@ impl OrderBookStream for BitstampStream {
         self.start_time = Arc::new(RwLock::new(orderbook.timestamp.parse::<u64>().unwrap()));
 
         Ok(orderbook.into())
-    }
-
-    async fn get_ob_stream(mut self) -> Result<Box<dyn Stream<Item = OrderbookUpdate> + Unpin>> {
-        self.inner_stream
-            .send(Message::Text(json!(self.subscription).to_string()))
-            .await?;
-
-        match self.inner_stream.next().await {
-            Some(msg) => {
-                // TODO: check if result is correct
-                msg?;
-            },
-            None => return Err(super::OrderbookError { details: String::from("No response") }),
-        }
-
-        let last_update = self.start_time.clone();
-
-        let result_stream = self.map::<OrderbookUpdate, _>(move |bel|{
-            // TODO: handle error properly
-            let timestamp = bel.data.timestamp.parse::<u64>().unwrap();
-            if timestamp <= *last_update.read().unwrap() {
-                return OrderbookUpdate {
-                    stream: String::from("bitstamp"),
-                    asks: BTreeMap::default(),
-                    bids: BTreeMap::default(),
-                };
-            }
-
-            // // Update the last read id
-            let mut lu = last_update.write().unwrap();
-            *lu = timestamp;
-
-            return OrderbookUpdate {
-                stream: String::from("bitstamp"),
-                asks: bel.data.asks.into_iter().map(|x| (x.0, x.1)).collect(),
-                bids: bel.data.bids.into_iter().map(|x| (x.0, x.1)).collect(),
-            };
-        });
-        Ok(Box::new(result_stream))
     }
 }

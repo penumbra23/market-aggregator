@@ -1,14 +1,17 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
+use std::collections::BTreeMap;
+
+use serde::{Serialize, Deserialize};
+
+pub type Decimal = rust_decimal::Decimal;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct OrderbookUpdate {
+    pub stream: String,
+    pub bids: BTreeMap<Decimal, Decimal>,
+    pub asks: BTreeMap<Decimal, Decimal>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Orderbook {
+    
 }

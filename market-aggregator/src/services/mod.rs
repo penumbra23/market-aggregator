@@ -1,13 +1,9 @@
 pub mod binance;
 pub mod bitstamp;
 
-use std::collections::BTreeMap;
+use common::OrderbookUpdate;
 
-use futures::Stream;
 use reqwest::StatusCode;
-use serde::{Serialize, Deserialize};
-
-type Decimal = rust_decimal::Decimal;
 
 #[derive(Debug)]
 pub struct OrderbookError {
@@ -38,19 +34,11 @@ impl From<reqwest::Error> for OrderbookError {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct OrderbookUpdate {
-    stream: String,
-    bids: BTreeMap<Decimal, Decimal>,
-    asks: BTreeMap<Decimal, Decimal>,
-}
-
 type Result<T> = std::result::Result<T, OrderbookError>;
 
 /// Trait for streams that serve `OrderBookUpdate`s.
 /// Each new service fetching orderbook entries needs to imlement `OrderBookStream`.
 #[async_trait::async_trait]
-pub trait OrderBookStream: Stream {
+pub trait OrderBookSnapshot {
     async fn fetch_snapshot(&mut self, market_pair: &str) -> Result<OrderbookUpdate>;
-    async fn get_ob_stream(self) -> Result<Box<dyn Stream<Item = OrderbookUpdate> + Unpin>>;
 }
