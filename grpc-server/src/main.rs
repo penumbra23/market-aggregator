@@ -25,7 +25,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .register_callback(DefaultChannelCallback)
         .await?;
 
-    let rounting_key = "rates.*";
+    let rounting_key = "rate.*";
     let exchange_name = "orderbook";
 
     let (queue_name, _, _) = channel.queue_declare(QueueDeclareArguments::new("grpc-server"))

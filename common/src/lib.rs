@@ -11,13 +11,14 @@ pub struct OrderbookUpdate {
     pub asks: BTreeMap<Decimal, Decimal>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
 pub struct OrderbookQueueItem {
     pub stream: String,
     pub asks: Vec<(Decimal, Decimal)>,
     pub bids: Vec<(Decimal, Decimal)>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Orderbook {
     pub stream: String,
     pub bids: BTreeMap<Decimal, Decimal>,

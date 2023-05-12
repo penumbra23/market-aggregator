@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, cmp::Ordering, fmt::format};
 
-use amqprs::{connection::{Connection, OpenConnectionArguments}, channel::{ExchangeDeclareArguments, ExchangeType, BasicPublishArguments}, BasicProperties};
-use common::Orderbook;
+use amqprs::{connection::{Connection, OpenConnectionArguments}, channel::{ExchangeDeclareArguments, ExchangeType, BasicPublishArguments, Channel}, BasicProperties};
+use common::{Orderbook, OrderbookUpdate, OrderbookQueueItem};
 use futures::{stream::select_all, StreamExt};
 use services::{binance::BinanceStream, bitstamp::BitstampStream, OrderbookError};
 
@@ -12,13 +12,15 @@ mod services;
 struct App {
     clients: HashMap<String, Box<dyn OrderbookConnection + Unpin>>,
     orderbooks: HashMap<String, Orderbook>,
+    channel: Channel,
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(channel: Channel) -> Self {
         Self {
             clients: HashMap::new(),
             orderbooks: HashMap::new(),
+            channel
         }
     }
 
@@ -40,12 +42,30 @@ impl App {
         }
 
         let mut streams = self.clients
-            .into_iter()
+            .iter_mut()
             .map(|(_, v)| v)
-            .collect::<Vec<Box<dyn OrderbookConnection + Unpin>>>();
+            .collect::<Vec<&mut Box<dyn OrderbookConnection + Unpin>>>();
 
         while let Some(order) = select_all(streams.iter_mut()).next().await {
-            println!("O: {:?}", order);
+            let order_update: OrderbookUpdate = order;
+            // TODO: handle incorrect orderbook
+            let orderbook = self.orderbooks.get_mut(&order_update.stream).unwrap();
+
+            orderbook.update_book(&order_update);
+
+            let args = BasicPublishArguments::new(
+                "orderbook", 
+                &format!("rate.{}", order_update.stream)
+            );
+
+            let queue_item: OrderbookQueueItem = orderbook.clone().into();
+
+            self.channel
+                .basic_publish(
+                    BasicProperties::default().with_persistence(true).finish(),
+                    serde_json::to_string(&queue_item)?.into_bytes(),
+                    args)
+                .await?;
         }
         Ok(())
     }
@@ -79,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .unwrap();
 
-    let mut app = App::new();
+    let mut app = App::new(channel);
 
     app.add_client("binance", Box::new(binance_client))?;
     app.add_client("bitstamp", Box::new(bitstamp_client))?;
