@@ -31,7 +31,7 @@ impl OrderbookService {
 impl OrderbookAggregator for OrderbookService {
     type BookSummaryStream = ReceiverStream<Result<Summary, Status>>;
 
-    async fn book_summary(&self, request: Request<Empty>) -> Result<Response<Self::BookSummaryStream>, Status> {
+    async fn book_summary(&self, _request: Request<Empty>) -> Result<Response<Self::BookSummaryStream>, Status> {
         let (tx, rx) = mpsc::channel(10);
         let mut client_recv = self.tx.subscribe();
         tokio::spawn(async move {

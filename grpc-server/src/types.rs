@@ -1,4 +1,4 @@
-use std::{cmp::{Reverse, Ordering}, collections::BTreeSet};
+use std::{cmp::{Reverse}};
 
 use common::Decimal;
 use sorted_vec::{SortedSet, ReverseSortedSet};
@@ -88,13 +88,15 @@ impl Orderbook {
     }
 
     fn calculate_spread(&mut self) {
-        self.spread = match (self.bids.first(), self.asks.first()) {
+        let spread = match (self.bids.first(), self.asks.first()) {
             (None, None) => Decimal::ZERO,
             (None, Some(ask)) => ask.price,
             (Some(bid), None) => bid.0.price,
             (Some(bid), Some(ask)) => 
                 ask.price - bid.0.price
-        }
+        };
+
+        self.spread = Decimal::abs(&spread);
     }
 }
 

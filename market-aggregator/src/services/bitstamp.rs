@@ -2,6 +2,7 @@ use std::{pin::Pin, task::Poll, collections::{HashMap}, sync::{Arc, RwLock}};
 
 use common::Decimal;
 use futures::{Stream, SinkExt, StreamExt, executor::block_on};
+use log::{error, info};
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -11,6 +12,7 @@ use tokio_tungstenite::{WebSocketStream, MaybeTlsStream, tungstenite::Message};
 use super::{OrderbookConnection, OrderbookUpdate, Result, OrderbookError};
 
 const BITSTAMP_WS_URL: &str = "wss://ws.bitstamp.net";
+const MAX_RECONNECT_RETRY: u8 = 3;
 
 #[derive(Debug, Deserialize)]
 pub struct BitstampOrderBookUpdate {
@@ -109,32 +111,42 @@ impl Stream for BitstampStream {
                                         }));
                                     },
                                     Err(err) => {
-                                        // TODO: log error
-                                        println!("Err {} {}", err, text);
+                                        error!("JSON error {}", err)
                                     },
                                 };
                             },
-                            Message::Ping(_) => {
-                                // TODO: implement pong
+                            Message::Ping(p) => {
+                                let _ = block_on(self.inner_stream.send(Message::Pong(p)));
                             },
-                            Message::Pong(_) => todo!(),
                             Message::Close(_) => {
-                                // TODO: check res and retry
-                                let _res = block_on(self.connect());
+                                let mut i = 0;
+                                while i < MAX_RECONNECT_RETRY {
+                                    let res = block_on(self.connect());
+                                    if res.is_ok() {
+                                        break;
+                                    }
+                                    i += 1;
+                                }
                             },
                             _ => {},
                         }
                     },
                     Err(err) => {
-                        // TODO: log error
-                        println!("Err {}", err);
+                        error!("Poll error {}", err)
                     },
                 };
                 cx.waker().wake_by_ref();
                 return Poll::Pending;
             }
             Poll::Ready(None) => {
-                let _res = block_on(self.connect());
+                let mut i = 0;
+                while i < MAX_RECONNECT_RETRY {
+                    let res = block_on(self.connect());
+                    if res.is_ok() {
+                        break;
+                    }
+                    i += 1;
+                }
                 cx.waker().wake_by_ref();
                 return Poll::Pending;
             },
@@ -173,8 +185,13 @@ impl OrderbookConnection for BitstampStream {
 
         match bitstamp_ws_stream.next().await {
             Some(msg) => {
-                println!("check msg {}", msg.unwrap());
-                // msg?;
+                match msg {
+                    Ok(msg) => info!("Bitstamp subscribe: {}", msg),
+                    Err(err) => {
+                        error!("Bitstamp subscribe error: {}", err);
+                        return Err(OrderbookError { details: err.to_string() });
+                    },
+                }
             },
             None => return Err(super::OrderbookError { details: String::from("No response") }),
         }

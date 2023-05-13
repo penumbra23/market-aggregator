@@ -2,6 +2,7 @@ use std::{task::Poll, pin::Pin, sync::{Arc, RwLock}};
 
 use common::Decimal;
 use futures::{SinkExt, StreamExt, Stream, executor::block_on};
+use log::{error, info};
 use serde::{Serialize, Deserialize};
 use serde_json::json;
 use tokio::net::TcpStream;
@@ -10,6 +11,7 @@ use tokio_tungstenite::{WebSocketStream, MaybeTlsStream, tungstenite::Message};
 use super::{Result, OrderbookUpdate, OrderbookError, OrderbookConnection};
 
 const BINANCE_WS_URL: &str = "wss://stream.binance.com:9443/ws";
+const MAX_RECONNECT_RETRY: u8 = 3;
 
 #[derive(Serialize)]
 struct BinanceSubscription {
@@ -106,24 +108,30 @@ impl Stream for BinanceStream {
                                             }));
                                     },
                                     Err(err) => {
-                                        // TODO: log
-                                        println!("Err {} {}", err, text);
+                                        error!("JSON error: {}", err)
                                     },
                                 };
                             },
                             Message::Close(_) => {
-                                // TODO: check res and retry
-                                let _res = block_on(self.connect());
+                                let mut i = 0;
+                                while i < MAX_RECONNECT_RETRY {
+                                    let res = block_on(self.connect());
+                                    if res.is_ok() {
+                                        break;
+                                    }
+                                    i += 1;
+                                }
                             },
-                            Message::Ping(p) => println!("ping {:?}", p),
-                            Message::Pong(p) => println!("pong {:?}", p),
+                            Message::Ping(p) => {
+                                // For now ignore results
+                                let _ = block_on(self.inner_stream.send(Message::Pong(p)));
+                            },
                             _ => {},
 
                         }
                     },
                     Err(err) => {
-                        // TODO: log error
-                        println!("Err {}", err);
+                        error!("Poll error {}", err)
                     },
                 };
                 
@@ -131,8 +139,16 @@ impl Stream for BinanceStream {
                 return Poll::Pending;
             },
             Poll::Ready(None) => {
-                // TODO: check res and retry
-                let _res = block_on(self.connect());
+                let mut i = 0;
+
+                while i < MAX_RECONNECT_RETRY {
+                    let res = block_on(self.connect());
+                    if res.is_ok() {
+                        break;
+                    }
+                    i += 1;
+                }
+                
                 cx.waker().wake_by_ref();
                 return Poll::Pending;
             },
@@ -171,8 +187,13 @@ impl OrderbookConnection for BinanceStream {
 
         match binance_ws_stream.next().await {
             Some(msg) => {
-                println!("check msg {}", msg.unwrap());
-                // msg?;
+                match msg {
+                    Ok(msg) => info!("Binance subscribe: {}", msg),
+                    Err(err) => {
+                        error!("Binance subscribe error: {}", err);
+                        return Err(OrderbookError { details: err.to_string() });
+                    },
+                }
             },
             None => return Err(super::OrderbookError { details: String::from("No response") }),
         }

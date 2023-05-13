@@ -43,7 +43,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let tx = orderbook_service.tx().clone();
     let sub = OrderbookSubscriber::new(tx);
 
-    let mut consumer = channel
+    let _consumer = channel
         .basic_consume(sub, args)
         .await
         .unwrap();

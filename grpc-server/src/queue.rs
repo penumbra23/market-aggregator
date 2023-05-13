@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use common::{OrderbookQueueItem, Decimal};
+use common::{OrderbookQueueItem};
 use tokio::sync::broadcast::Sender;
 use tonic::Status;
 
@@ -23,7 +23,7 @@ impl OrderbookSubscriber {
 
 #[async_trait]
 impl amqprs::consumer::AsyncConsumer for OrderbookSubscriber {
-  async fn consume(&mut self, _channel: &amqprs::channel::Channel, deliver: amqprs::Deliver, basic_properties: amqprs::BasicProperties, content: Vec<u8>) {
+  async fn consume(&mut self, _channel: &amqprs::channel::Channel, _deliver: amqprs::Deliver, _basic_properties: amqprs::BasicProperties, content: Vec<u8>) {
     // TODO: handle error
     let orderbook_item: OrderbookQueueItem = serde_json::from_slice(&content).unwrap();
 

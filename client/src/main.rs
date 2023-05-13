@@ -1,4 +1,4 @@
-use orderbook::{Empty, Summary, orderbook_aggregator_client::OrderbookAggregatorClient};
+use orderbook::{Empty, orderbook_aggregator_client::OrderbookAggregatorClient};
 
 pub mod orderbook {
     tonic::include_proto!("orderbook");
