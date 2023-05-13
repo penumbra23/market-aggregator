@@ -5,6 +5,7 @@ use tonic::transport::Server;
 
 mod server;
 mod queue;
+mod types;
 
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -39,7 +40,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .finish();
 
     let mut consumer = channel
-        .basic_consume(OrderbookSubscriber{}, args)
+        .basic_consume(OrderbookSubscriber::new(), args)
         .await
         .unwrap();
 
