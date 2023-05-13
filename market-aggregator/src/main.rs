@@ -36,6 +36,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
     let cli = Cli::parse();
     
     let conn_args = OpenConnectionArguments::new(

@@ -17,6 +17,7 @@ sorted-vec = "0.8"
 common = { path = "../common" }
 log = "0.4"
 env_logger = "0.10"
+clap = { version = "4.2.1", features = ["derive" ]}
 
 [build-dependencies]
 tonic-build = "0.9.1"

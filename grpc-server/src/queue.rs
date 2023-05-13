@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use common::{OrderbookQueueItem};
+use log::error;
 use tokio::sync::broadcast::Sender;
 use tonic::Status;
 
@@ -24,8 +25,13 @@ impl OrderbookSubscriber {
 #[async_trait]
 impl amqprs::consumer::AsyncConsumer for OrderbookSubscriber {
   async fn consume(&mut self, _channel: &amqprs::channel::Channel, _deliver: amqprs::Deliver, _basic_properties: amqprs::BasicProperties, content: Vec<u8>) {
-    // TODO: handle error
-    let orderbook_item: OrderbookQueueItem = serde_json::from_slice(&content).unwrap();
+    let orderbook_item: OrderbookQueueItem = match serde_json::from_slice(&content) {
+      Ok(item) => item,
+      Err(err) => {
+        error!("JSON error: {}", err);
+        return;
+      }
+    };
 
     for ask in &orderbook_item.asks {
       self.orderbook.update_asks(OrderbookEntry{
@@ -43,7 +49,8 @@ impl amqprs::consumer::AsyncConsumer for OrderbookSubscriber {
       });
     }
 
-    // TODO: handle error
-    self.tx.send(Ok(self.orderbook.clone().into())).unwrap();
+    if let Err(err) = self.tx.send(Ok(self.orderbook.clone().into())) {
+      error!("Send error {}", err);
+    };
   }
 }

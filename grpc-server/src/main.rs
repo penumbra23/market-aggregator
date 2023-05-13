@@ -1,4 +1,5 @@
 use amqprs::{connection::{Connection, OpenConnectionArguments}, callbacks::{DefaultConnectionCallback, DefaultChannelCallback}, channel::{QueueDeclareArguments, QueueBindArguments, BasicConsumeArguments}};
+use clap::Parser;
 use queue::OrderbookSubscriber;
 use server::{orderbook::orderbook_aggregator_server::OrderbookAggregatorServer, OrderbookService};
 use tonic::transport::Server;
@@ -7,15 +8,50 @@ mod server;
 mod queue;
 mod types;
 
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// URL to the RabbitMQ instance
+    #[arg(short, long)]
+    mq_host: String,
+
+    /// URL to the RabbitMQ instance
+    #[arg(short, long)]
+    mq_port: u16,
+
+    /// URL to the RabbitMQ instance
+    #[arg(short, long)]
+    mq_user: String,
+
+    /// URL to the RabbitMQ instance
+    #[arg(short, long)]
+    mq_pass: String,
+
+    /// Name of the orderbook topic
+    #[arg(default_value_t = String::from("orderbook"))]
+    exchange_name: String,
+
+    /// Queue name on RabbitMQ
+    #[arg(short, long, default_value_t = String::from("grpc-server"))]
+    queue_name: String,
+
+    /// Port to run the gRPC server
+    port: u16,
+}
+
 #[tokio::main]
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
+    let cli = Cli::parse();
+
     let connection = Connection::open(&OpenConnectionArguments::new(
-        "localhost",
-        5672,
-        "user",
-        "password",
+        &cli.mq_host,
+        cli.mq_port,
+        &cli.mq_user,
+        &cli.mq_pass,
     ))
     .await?;
+
     connection
         .register_callback(DefaultConnectionCallback)
         .await?;
@@ -27,9 +63,9 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     let rounting_key = "rate.*";
-    let exchange_name = "orderbook";
+    let exchange_name = &cli.exchange_name;
 
-    let (queue_name, _, _) = channel.queue_declare(QueueDeclareArguments::new("grpc-server"))
+    let (queue_name, _, _) = channel.queue_declare(QueueDeclareArguments::new(&cli.queue_name))
         .await?.unwrap();
 
     channel.queue_bind(QueueBindArguments::new(&queue_name, exchange_name, rounting_key))
@@ -48,7 +84,7 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .await
         .unwrap();
 
-    let address = "0.0.0.0:9090".parse().unwrap();
+    let address = format!("0.0.0.0:{}", cli.port).parse()?;
     
     Server::builder()
         .add_service(OrderbookAggregatorServer::new(orderbook_service))

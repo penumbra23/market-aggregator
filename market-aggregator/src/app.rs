@@ -3,7 +3,7 @@ use std::{collections::HashMap};
 use amqprs::{channel::{BasicPublishArguments, Channel}, BasicProperties};
 use common::{Orderbook, OrderbookUpdate, OrderbookQueueItem};
 use futures::{stream::select_all, StreamExt};
-use log::{error, info};
+use log::{error, info, trace};
 use crate::services::{OrderbookError};
 
 use crate::services::OrderbookConnection;
@@ -35,6 +35,8 @@ impl App {
     }
 
     pub async fn run(mut self) -> Result<(), Box<dyn std::error::Error>> {
+        info!("Application running");
+
         for (_, cl) in &mut self.clients {
             let res = cl.connect().await;
             if let Err(err) = res {
@@ -48,6 +50,8 @@ impl App {
             .collect::<Vec<&mut Box<dyn OrderbookConnection + Unpin>>>();
 
         while let Some(order) = select_all(streams.iter_mut()).next().await {
+            trace!("Order incoming: {:?}", order);
+            
             let order_update: OrderbookUpdate = order;
             
             let orderbook = match self.orderbooks.get_mut(&order_update.stream) {

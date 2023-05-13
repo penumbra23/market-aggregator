@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use log::error;
 use tokio::sync::{broadcast::{Sender, Receiver, channel}, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -36,8 +37,9 @@ impl OrderbookAggregator for OrderbookService {
         let mut client_recv = self.tx.subscribe();
         tokio::spawn(async move {
             while let Ok(order) = client_recv.recv().await {
-                // TODO: handle error
-                tx.send(order).await.unwrap();
+                if let Err(err) = tx.send(order).await {
+                    error!("Send error: {}", err);
+                }
             }
         });
         Ok(Response::new(ReceiverStream::new(rx)))

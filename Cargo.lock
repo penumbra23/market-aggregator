@@ -616,6 +616,7 @@ version = "0.1.0"
 dependencies = [
  "amqprs",
  "async-trait",
+ "clap",
  "common",
  "env_logger",
  "log",
