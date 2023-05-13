@@ -1,0 +1,13 @@
+FROM rust:1.68 as build
+
+WORKDIR /market-aggregator
+
+COPY . .
+
+RUN cargo build --release -p market-aggregator
+
+FROM rust:1.68-slim
+
+COPY --from=build /market-aggregator/target/release/market-aggregator .
+
+CMD ["./market-aggregator"]

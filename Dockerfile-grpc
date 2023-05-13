@@ -1,0 +1,16 @@
+FROM rust:1.68 as build
+
+WORKDIR /grpc-server
+RUN apt-get update && \
+    apt-get install --no-install-recommends --assume-yes \
+      protobuf-compiler
+
+COPY . .
+
+RUN cargo build --release -p grpc-server
+
+FROM rust:1.68-slim
+
+COPY --from=build /grpc-server/target/release/grpc-server .
+
+CMD ["./grpc-server"]

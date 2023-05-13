@@ -3,9 +3,38 @@ version: '3.8'
 services:
   rabbitmq:
     image: rabbitmq:3-management
+    container_name: rabbitmq
     ports:
     - 5672:5672
     - 8081:15672
     environment:
     - RABBITMQ_DEFAULT_USER=user
     - RABBITMQ_DEFAULT_PASS=password
+  
+  market-aggregator:
+    build:
+      dockerfile: Dockerfile-market
+    restart: always
+    depends_on:
+    - rabbitmq
+    command: ["./market-aggregator", 
+      "--mq-host", "rabbitmq",
+      "--mq-port", "5672",
+      "--mq-user", "user",
+      "--mq-pass", "password",
+      "orderbook", "btcusdt"]
+  
+  grpc-server:
+    build:
+      dockerfile: Dockerfile-grpc
+    restart: always
+    depends_on:
+    - rabbitmq
+    ports:
+    - 9090:9090
+    command: ["./grpc-server",
+      "--mq-host", "rabbitmq",
+      "--mq-port", "5672",
+      "--mq-user", "user",
+      "--mq-pass", "password",
+      "orderbook", "9090"]
