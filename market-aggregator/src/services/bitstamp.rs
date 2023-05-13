@@ -114,7 +114,9 @@ impl Stream for BitstampStream {
                                     },
                                 };
                             },
-                            Message::Ping(_) => todo!(),
+                            Message::Ping(_) => {
+                                // TODO: implement pong
+                            },
                             Message::Pong(_) => todo!(),
                             Message::Close(_) => {
                                 // TODO: check res and retry

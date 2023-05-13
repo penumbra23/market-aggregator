@@ -39,13 +39,16 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .manual_ack(false)
         .finish();
 
+    let orderbook_service = OrderbookService::new();
+    let tx = orderbook_service.tx().clone();
+    let sub = OrderbookSubscriber::new(tx);
+
     let mut consumer = channel
-        .basic_consume(OrderbookSubscriber::new(), args)
+        .basic_consume(sub, args)
         .await
         .unwrap();
 
     let address = "0.0.0.0:9090".parse().unwrap();
-    let orderbook_service = OrderbookService::default();
     
     Server::builder()
         .add_service(OrderbookAggregatorServer::new(orderbook_service))

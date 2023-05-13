@@ -4,4 +4,5 @@ members = [
     "common",
     "market-aggregator",
     "grpc-server",
+    "client"
 ]
