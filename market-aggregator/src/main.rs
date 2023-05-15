@@ -14,15 +14,15 @@ struct Cli {
     #[arg(short, long)]
     mq_host: String,
 
-    /// URL to the RabbitMQ instance
+    /// Port to the RabbitMQ instance
     #[arg(short, long)]
     mq_port: u16,
 
-    /// URL to the RabbitMQ instance
+    /// Username for the RabbitMQ instance
     #[arg(short, long)]
     mq_user: String,
 
-    /// URL to the RabbitMQ instance
+    /// Password for the RabbitMQ user
     #[arg(short, long)]
     mq_pass: String,
 

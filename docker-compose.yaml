@@ -17,6 +17,8 @@ services:
     restart: always
     depends_on:
     - rabbitmq
+    environment:
+    - RUST_LOG=debug
     command: ["./market-aggregator", 
       "--mq-host", "rabbitmq",
       "--mq-port", "5672",
@@ -30,6 +32,8 @@ services:
     restart: always
     depends_on:
     - rabbitmq
+    environment:
+    - RUST_LOG=debug
     ports:
     - 9090:9090
     command: ["./grpc-server",
